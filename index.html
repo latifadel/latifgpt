@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LatifGPT</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      padding: 0.75rem 1rem;
+      background: #020617;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+    header span {
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
+    #status {
+      font-size: 0.75rem;
+      color: #a5b4fc;
+    }
+    #chat {
+      flex: 1;
+      padding: 1rem;
+      overflow-y: auto;
+    }
+    .msg {
+      margin-bottom: 0.75rem;
+      max-width: 80%;
+      padding: 0.5rem 0.75rem;
+      border-radius: 0.75rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .msg.user {
+      margin-left: auto;
+      background: #2563eb;
+    }
+    .msg.bot {
+      margin-right: auto;
+      background: #111827;
+      border: 1px solid #1f2937;
+    }
+    .label {
+      font-size: 0.7rem;
+      opacity: 0.7;
+      margin-bottom: 0.15rem;
+    }
+    #input-area {
+      padding: 0.75rem;
+      border-top: 1px solid #1f2937;
+      background: #020617;
+      display: flex;
+      gap: 0.5rem;
+    }
+    #prompt {
+      flex: 1;
+      resize: none;
+      border-radius: 0.5rem;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      padding: 0.5rem 0.75rem;
+      min-height: 2.5rem;
+      max-height: 6rem;
+      font-family: inherit;
+    }
+    #send {
+      border: none;
+      border-radius: 0.5rem;
+      padding: 0 1rem;
+      cursor: pointer;
+      background: #22c55e;
+      color: #022c22;
+      font-weight: 600;
+      min-width: 80px;
+    }
+    #send:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    small {
+      color: #6b7280;
+      font-size: 0.7rem;
+      padding: 0 0.75rem 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>LatifGPT</h1>
+      <span>Local in-browser AI assistant</span>
+    </div>
+    <div id="status">Loading model… first time can take a while ⏳</div>
+  </header>
+
+  <div id="chat"></div>
+  <small>Press Enter to send, Shift+Enter for a new line.</small>
+
+  <div id="input-area">
+    <textarea id="prompt" placeholder="Ask LatifGPT anything…"></textarea>
+    <button id="send" disabled>Send</button>
+  </div>
+
+  <script type="module">
+    // 1) Import WebLLM (runs model directly in browser, no backend)
+    import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm";
+
+    const chatEl = document.getElementById("chat");
+    const promptEl = document.getElementById("prompt");
+    const sendBtn = document.getElementById("send");
+    const statusEl = document.getElementById("status");
+
+    let engine = null;
+    const messages = [
+      {
+        role: "system",
+        content: "You are LatifGPT, a friendly helpful AI created by Latif. Answer clearly and concisely."
+      }
+    ];
+
+    function addMessage(who, text, cls) {
+      const wrap = document.createElement("div");
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = who;
+      const bubble = document.createElement("div");
+      bubble.className = "msg " + cls;
+      bubble.textContent = text;
+      wrap.appendChild(label);
+      wrap.appendChild(bubble);
+      chatEl.appendChild(wrap);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      return bubble;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function initEngine() {
+      try {
+        setStatus("Loading model into your browser…");
+        // Example model id from WebLLM docs (Llama 3.1 8B instruct variant)
+        // Requires a browser with WebGPU support (Chrome/Edge, fairly recent). :contentReference[oaicite:1]{index=1}
+        const modelId = "Llama-3.1-8B-Instruct-q4f32_1-MLC";
+
+        engine = await CreateMLCEngine(modelId, {
+          initProgressCallback(info) {
+            // info may include text or progress fields depending on version
+            if (info && info.text) {
+              setStatus(info.text);
+            }
+          }
+        });
+
+        setStatus("Model ready! ✔");
+        sendBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        setStatus("Error loading model. Check console.");
+      }
+    }
+
+    initEngine();
+
+    async function sendMessage() {
+      if (!engine) return;
+      const content = promptEl.value.trim();
+      if (!content) return;
+
+      promptEl.value = "";
+      sendBtn.disabled = true;
+
+      messages.push({ role: "user", content });
+      addMessage("You", content, "user");
+
+      const botBubble = addMessage("LatifGPT", "…", "bot");
+      let replyText = "";
+
+      try {
+        const stream = await engine.chat.completions.create({
+          messages,
+          stream: true,
+          temperature: 0.7
+        });
+
+        for await (const chunk of stream) {
+          const delta = chunk.choices?.[0]?.delta?.content || "";
+          if (!delta) continue;
+          replyText += delta;
+          botBubble.textContent = replyText;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+
+        messages.push({ role: "assistant", content: replyText });
+      } catch (err) {
+        console.error(err);
+        botBubble.textContent = "Error: " + err.message;
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    promptEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>
