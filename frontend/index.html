@@ -31,7 +31,6 @@
       display: flex;
     }
 
-    /* Layout */
     .app {
       display: grid;
       grid-template-columns: 260px 1fr;
@@ -49,7 +48,6 @@
       }
     }
 
-    /* Sidebar */
     .sidebar {
       border-right: 1px solid var(--border-subtle);
       background: #020617;
@@ -128,7 +126,6 @@
       color: #a5b4fc;
     }
 
-    /* Main area */
     .main {
       display: flex;
       flex-direction: column;
@@ -164,7 +161,6 @@
       color: #a5b4fc;
     }
 
-    /* Chat area */
     .chat-wrapper {
       flex: 1;
       overflow: hidden;
@@ -281,7 +277,6 @@
       40% { opacity: 1; transform: translateY(-1px); }
     }
 
-    /* Input area */
     .input-area {
       border-top: 1px solid var(--border-subtle);
       padding: 0.75rem 1rem 1rem;
@@ -358,7 +353,6 @@
 </head>
 <body>
   <div class="app">
-    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="logo">
         <div class="logo-icon">L</div>
@@ -371,19 +365,18 @@
         <span>＋</span> <span>New chat</span>
       </button>
       <div class="sidebar-footer">
-        Frontend on <strong>GitHub Pages</strong><br />
-        Backend via your API server.
+        Runs fully in your browser.<br />
+        No API keys required.
       </div>
     </aside>
 
-    <!-- Main -->
     <main class="main">
       <header class="topbar">
         <div class="topbar-title">
           <strong>LatifGPT</strong>
-          <span>Fast AI chat powered by your backend</span>
+          <span>TinyLlama model in your browser</span>
         </div>
-        <div id="status">Ready</div>
+        <div id="status">Loading model… first time may take a bit ⏳</div>
       </header>
 
       <div class="chat-wrapper">
@@ -392,8 +385,8 @@
             <div>
               <h2 style="margin:0 0 0.4rem;font-size:1.1rem;">Welcome to LatifGPT</h2>
               <p style="margin:0;font-size:0.85rem;">
-                Start a conversation on the bottom. Your messages are sent to your AI backend
-                and responses appear here.
+                Ask a question below. The first time you use it, the AI model is downloaded into
+                your browser and then reused from cache.
               </p>
             </div>
           </div>
@@ -402,7 +395,7 @@
         <div class="input-area">
           <div class="input-row">
             <textarea id="prompt" placeholder="Ask LatifGPT anything…"></textarea>
-            <button id="send">Send ➤</button>
+            <button id="send" disabled>Send ➤</button>
           </div>
           <div class="hint">
             <span>Enter to send · Shift+Enter for new line</span>
@@ -413,9 +406,10 @@
     </main>
   </div>
 
-  <script>
-    // 🔧 EDIT THIS: your backend /chat endpoint
-    const BACKEND_URL = "https://your-latifgpt-backend-url/chat";
+  <script type="module">
+    import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm";
+
+    const SELECTED_MODEL = "TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC-1k";
 
     const chatEl = document.getElementById("chat");
     const promptEl = document.getElementById("prompt");
@@ -424,10 +418,13 @@
     const emptyStateEl = document.getElementById("empty-state");
     const newChatBtn = document.getElementById("new-chat-btn");
 
+    let engine = null;
+    let engineReady = false;
+
     const messages = [
       {
         role: "system",
-        content: "You are LatifGPT, a friendly, concise AI assistant created by Latif."
+        content: "You are LatifGPT, a friendly and concise AI assistant created by Latif."
       }
     ];
 
@@ -453,10 +450,15 @@
       startNewChat();
     });
 
-    function addMessage(role, content, options = {}) {
-      if (emptyStateEl && emptyStateEl.parentNode) {
-        emptyStateEl.parentNode.removeChild(emptyStateEl);
+    function removeEmptyState() {
+      const es = document.getElementById("empty-state");
+      if (es && es.parentNode) {
+        es.parentNode.removeChild(es);
       }
+    }
+
+    function addMessage(role, content, options = {}) {
+      removeEmptyState();
 
       const row = document.createElement("div");
       row.className = "msg-row " + (role === "user" ? "user" : "bot");
@@ -478,8 +480,14 @@
 
       wrap.appendChild(nameRow);
       wrap.appendChild(bubble);
-      row.appendChild(role === "user" ? wrap : avatar);
-      row.appendChild(role === "user" ? avatar : wrap);
+
+      if (role === "user") {
+        row.appendChild(wrap);
+        row.appendChild(avatar);
+      } else {
+        row.appendChild(avatar);
+        row.appendChild(wrap);
+      }
 
       chatEl.appendChild(row);
       chatEl.scrollTop = chatEl.scrollHeight;
@@ -496,9 +504,35 @@
       return { row, bubble };
     }
 
+    async function initEngine() {
+      try {
+        setStatus("Loading TinyLlama model into your browser…");
+        engine = await CreateMLCEngine(SELECTED_MODEL, {
+          initProgressCallback(info) {
+            if (info && info.text) {
+              setStatus(info.text);
+            }
+          }
+        });
+        engineReady = true;
+        setStatus("Ready ✅");
+        sendBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        setStatus("Error loading model. Your browser may not support WebGPU.");
+      }
+    }
+
+    initEngine();
+
     async function sendMessage() {
       const content = promptEl.value.trim();
       if (!content) return;
+
+      if (!engineReady) {
+        alert("Model is still loading. Please wait a bit, then try again.");
+        return;
+      }
 
       sendBtn.disabled = true;
       promptEl.value = "";
@@ -510,25 +544,33 @@
       setStatus("LatifGPT is thinking…");
       const { bubble } = addMessage("assistant", "", { typingIndicator: true });
 
+      let replyText = "";
+
       try {
-        const res = await fetch(BACKEND_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages })
+        const stream = await engine.chat.completions.create({
+          messages,
+          temperature: 0.7,
+          stream: true
         });
 
-        if (!res.ok) {
-          throw new Error("HTTP " + res.status);
+        for await (const chunk of stream) {
+          const delta = chunk.choices?.[0]?.delta?.content || "";
+          if (!delta) continue;
+          replyText += delta;
+          bubble.textContent = replyText;
+          chatEl.scrollTop = chatEl.scrollHeight;
         }
 
-        const data = await res.json();
-        const reply = data.reply || "No reply from server.";
-        bubble.textContent = reply;
-        messages.push({ role: "assistant", content: reply });
-        setStatus("Ready");
+        if (!replyText) {
+          replyText = "I couldn't generate a reply this time. Try asking again.";
+          bubble.textContent = replyText;
+        }
+
+        messages.push({ role: "assistant", content: replyText });
+        setStatus("Ready ✅");
       } catch (err) {
         console.error(err);
-        bubble.textContent = "Error talking to backend. Check console / backend logs.";
+        bubble.textContent = "Error running the model in your browser.";
         setStatus("Error");
       } finally {
         sendBtn.disabled = false;
